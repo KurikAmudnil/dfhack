@@ -122,10 +122,10 @@ DFhackCExport command_result plugin_onupdate ( color_ostream &out )
 	if (active && last_tick != *df::global::cur_year_tick)
 	{
 		last_tick = *df::global::cur_year_tick;
-		out << last_tick << endl;
+		out << last_tick << " : " << (last_tick + 600) % 1200 << " : " << ( (last_tick + 600) % 1200 == 0 ) << endl;
 		if ( (last_tick + 600) % 1200 == 0 ) // middle of each day
 		{
-			out.print("call doJanitor");
+			out.print("call doJanitor\n");
 			doJanitor(out);
 		}
 	}
