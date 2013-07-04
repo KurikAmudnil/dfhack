@@ -115,24 +115,23 @@ DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_chan
 
 // Whatever you put here will be done in each game step. Don't abuse it.
 // It's optional, so you can just comment it out like this if you don't need it.
-// /*
 DFhackCExport command_result plugin_onupdate ( color_ostream &out )
 {
-	if (((*df::global::cur_year_tick + 600) % 1200) == 0 )
+	static int32_t last_tick = 0;
+	// active (implies enabled and map loaded)
+	if (active && last_tick != *df::global::cur_year_tick)
 	{
-		out.print("suposed to call doJanitor()");
-	}
-    // whatever. You don't need to suspend DF execution here.
-	// if active (implies enabled and map loaded), and middle of each day
-	if ( active && (((*df::global::cur_year_tick + 600) % 1200) == 0 ))
-	{
-		out.print("call doJanitor");
-		doJanitor(out);
+		last_tick = *df::global::cur_year_tick;
+		out << last_tick << endl;
+		if ( (last_tick + 600) % 1200 == 0 ) // middle of each day
+		{
+			out.print("call doJanitor");
+			doJanitor(out);
+		}
 	}
 
     return CR_OK;
 }
-//*/
 
 // The command processor
 command_result janitor(color_ostream &out, std::vector <std::string> & parameters)
