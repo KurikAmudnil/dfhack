@@ -1,4 +1,5 @@
 
+#include <vector>
 #include "Error.h"
 #include "Core.h"
 #include <Console.h>
@@ -19,6 +20,8 @@
 #include "df/ui.h"
 #include "modules/Units.h"
 #include "modules/Burrows.h"
+#include "modules/World.h"
+
 #include "MiscUtils.h"
 
 using namespace DFHack;
@@ -26,6 +29,7 @@ using namespace df::enums;
 using df::global::world;
 using df::global::ui;
 using df::global::job_next_id;
+using df::general_ref_unit_workerst;
 
 // our own, empty header.
 #include "janitor.h"
@@ -100,7 +104,7 @@ DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_chan
 				out << "Janitor created burrow " << BURROW_NAME << endl;
 			}
 			active = true;
-			out.print("Janitor is active\n");
+			out << "Janitor: is now active, using " << BURROW->id << ":" << BURROW->name << endl;
 		}
         break;
 	case DFHack::state_change_event::SC_MAP_UNLOADED:
@@ -122,10 +126,10 @@ DFhackCExport command_result plugin_onupdate ( color_ostream &out )
 	if (active && last_tick != *df::global::cur_year_tick)
 	{
 		last_tick = *df::global::cur_year_tick;
-		out << last_tick << " : " << (last_tick + 600) % 1200 << " : " << ( (last_tick + 600) % 1200 == 0 ) << endl;
+//out << last_tick << " : " << (last_tick + 600) % 1200 << " : " << ( (last_tick + 600) % 1200 == 0 ) << endl;
 		if ( (last_tick + 600) % 1200 == 0 ) // middle of each day
 		{
-			out.print("call doJanitor\n");
+//out.print("call doJanitor\n");
 			doJanitor(out);
 		}
 	}
@@ -255,11 +259,12 @@ df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *un
 	df::job * job = new df::job();
 	job->id = *job_next_id;
 	job->pos = pos; // shallow copy?
+	//job->pos.x = pos.x; job->pos.y = pos.y; job->pos.z = pos.z;
 
 	job->job_type = df::job_type::Clean;
 	job->flags.bits.special = true;
 	//job.unk4 = 0--1129462340
-	*job_next_id++;
+	++(*job_next_id);
 	
 	// create joblink
 	df::job_list_link * joblink = new df::job_list_link();
@@ -271,9 +276,10 @@ df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *un
 	joblink->prev = jobslinklist;
 	
 	// assign job to unit
-	df::general_ref_unit_workerst *ref = new df::general_ref_unit_workerst();
+	// general refs have virtual methods, use allocate
+	auto ref = df::allocate<df::general_ref_unit_workerst>();
 	ref->unit_id = unit->id;
-	job->general_refs.push_back(ref); // is this right?
+	job->general_refs.push_back(  ref  );
 	unit->job.current_job = job;
 	unit->path.dest = pos; // shallow copy?
 	
@@ -284,7 +290,6 @@ df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *un
 		unit->path.path.y.resize(0);
 		unit->path.path.z.resize(0);
 	}
-//print('created job')
 	return joblink;
 }
 //--------------------------------------------------
@@ -304,39 +309,40 @@ bool isUnitBurrowTile(df::map_block *block, df::unit *unit, int x,int y)
 
 
 
-
+#define MAX_IDLE 15
 //--------------------------------------------------
 //  doJanitor assign idle units to cleaning designations
 //--------------------------------------------------
 void doJanitor(color_ostream &out)
 {
-out.print("doJanitor started");
+//out.print("doJanitor started\n");
 	//CHECK_NULL_POINTER(BURROW);
 	if ( !BURROW ) //= NULL
 	{
 		// shouldn't happen
 		//printerr('Janitor: burrow missing');
-		out.printerr("Janitor: burrow missing");
+		out.printerr("Janitor: burrow missing\n");
 		return;
 	}
-out.print("doJanitor has burrow");
-	if ( BURROW->block_x.size() > 0 )
+//out.print("doJanitor has burrow\n");
+//out << BURROW->id << ":" << BURROW->name << ":" << BURROW->block_x.size() << endl;
+	if ( BURROW->block_x.size() == 0 )
 	{
 		return;
 	}
-out.print("doJanitor has blocks");
+//out.print("doJanitor has blocks\n");
 	// find end of job list
 	df::job_list_link *jobslinklist = world->job_list.next;
 	for (; jobslinklist->next; jobslinklist = jobslinklist->next)
 		;
-out.print("doJanitor found end of jobs list");
+//out.print("doJanitor found end of jobs list\n");
 
 
 	//local found = false
-out.print("doJanitor initializing iterator");
+//out.print("doJanitor initializing iterator\n");
 		/*
 			Init Iterator
--- max idle units 10, max units searched 30, max blocks 5
+-- max idle units MAX_IDLE, max units searched 30, max blocks 5
 print('init iterator', last_unit_idx)	
 	-- if at least 20 units to scan at end of df_units, then scan from where we left off
 	-- otherwise start from the beginning
@@ -348,13 +354,13 @@ print('init iterator', last_unit_idx)
 	int last_unit_idx = (LAST_UNIT_IDX > df_units.size() - 20) ? 0 : LAST_UNIT_IDX ;
 	int max_unit_idx = df_units.size(); //(last_unit_idx + 200) < #df_units and (last_unit_idx + 200) or 
 
-	df::unit *units[] = { false, false, false, false, false, false, false, false, false, false };
-	int matrix[5][10] = {  // [block][unit] -- distance weight matrix
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 }
+	df::unit *units[MAX_IDLE];
+	int matrix[5][MAX_IDLE] = {  // [block][unit] -- distance weight matrix
+		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
+		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
+		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
+		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
+		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 }
 	};
 	//std::fill_n(matrix, 5, 10000);
 	
@@ -370,7 +376,7 @@ print('init iterator', last_unit_idx)
 			{
 				units[idle_count] = df_units[i];
 				++idle_count;
-				if (idle_count >= 10) break ;
+				if (idle_count >= MAX_IDLE) break ;
 			}
 		}
 		if (i < df_units.size())
@@ -382,7 +388,7 @@ print('init iterator', last_unit_idx)
 
 	while ( idle_count > 0 && BURROW->block_x.size() > 0 )	// iterate next unit
 	{
-out.print("iterate next unit");
+//out.print("iterate next unit\n");
 		// populate the distance matrix, this has to be
 		// done for each iteration because a block may 
 		// have been removed in the previous iteration.
@@ -477,7 +483,7 @@ out.print("iterate next unit");
 								{
 									// assign job, receive new job link
 									jobslinklist = assignCleanJob(jobslinklist, unit, pos);
-out << "unit assigned" << endl;
+//out << "unit assigned" << endl;
 									// cleanup some unneccessary assignments
 									if ( x+2 < 16 && tiles->getassignment(x+2,y) && block->walkable[x+2][y] > 0 )
 										tiles->setassignment(x+1,y,false);
