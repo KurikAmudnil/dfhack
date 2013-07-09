@@ -163,3 +163,15 @@ OPTION(BUILD_SKELETON "Build the skeleton plugin." OFF)
 if(BUILD_SKELETON)
     add_subdirectory(skeleton)
 endif()
+
+# this is the janitor plugin. copied from skeleton
+OPTION(BUILD_JANITOR "Build the janitor plugin." OFF)
+if(BUILD_JANITOR)
+    add_subdirectory(janitor)
+endif()
+
+# this is the growthfix plugin. copied from skeleton
+OPTION(BUILD_GROWTHFIX "Build the growthfix plugin." ON)
+if(BUILD_GROWTHFIX)
+    add_subdirectory(growthfix)
+endif()
