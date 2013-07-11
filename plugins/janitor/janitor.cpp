@@ -14,13 +14,18 @@
 #include "df/job_list_link.h"
 #include "df/general_ref.h"
 #include "df/general_ref_unit_workerst.h"
+#include "df/squad.h"
+#include "df/misc_trait_type.h"
+#include "df/unit_misc_trait.h"
 #include "df/burrow.h"
 #include "df/block_burrow.h"
+#include "df/tile_bitmask.h"
 #include "df/world.h"
 #include "df/ui.h"
 #include "modules/Units.h"
 #include "modules/Burrows.h"
 #include "modules/World.h"
+#include "modules/Translation.h"
 
 #include "MiscUtils.h"
 
@@ -33,6 +38,10 @@ using df::general_ref_unit_workerst;
 
 // our own, empty header.
 #include "janitor.h"
+
+
+#define MAX_IDLE 20
+#define MAX_BLOCKS 20
 
 static const string BURROW_NAME = "\17" " CLEANING DESIGNATIONS " "\17"; //0x0F or 15 decimal, dwarf money symbol
 
@@ -93,7 +102,7 @@ DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_chan
 			BURROW = Burrows::findByName(BURROW_NAME);
 			if (!BURROW)
 			{
-				BURROW = new df::burrow();
+				BURROW = df::allocate<df::burrow>();
 				BURROW->name = BURROW_NAME;
 				BURROW->tile = 15;
 				BURROW->fg_color = 11;
@@ -104,7 +113,7 @@ DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_chan
 				out << "Janitor created burrow " << BURROW_NAME << endl;
 			}
 			active = true;
-			out << "Janitor: is now active, using " << BURROW->id << ":" << BURROW->name << endl;
+			out << "Janitor: is now active, using " << BURROW->name << endl;
 		}
         break;
 	case DFHack::state_change_event::SC_MAP_UNLOADED:
@@ -149,12 +158,6 @@ command_result janitor(color_ostream &out, std::vector <std::string> & parameter
     if (parameters.empty())
         return CR_WRONG_USAGE;
 
-    // Commands are called from threads other than the DF one.
-    // Suspend this thread until DF has time for us. If you
-    // use CoreSuspender, it'll automatically resume DF when
-    // execution leaves the current scope.
-	CoreSuspender suspend;
-
     string cmd = toLower(parameters[0]);
 
     if (cmd == "enable")
@@ -171,6 +174,15 @@ command_result janitor(color_ostream &out, std::vector <std::string> & parameter
 		active = false;
 		out.print("Janitor disabled\n");
 		// if map loaded ...?
+    }
+    else if (cmd == "now")
+    {
+        // Commands are called from threads other than the DF one.
+        // Suspend this thread until DF has time for us. If you
+        // use CoreSuspender, it'll automatically resume DF when
+        // execution leaves the current scope.
+	    CoreSuspender suspend;
+        doJanitor(out);
     }
     else if (cmd == "status")
     {
@@ -253,10 +265,10 @@ end
 //--------------------------------------------------
 //------------  create and assign job  -------------
 //--------------------------------------------------
-df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *unit, df::coord pos)//jobslinklist, unit, pos
+df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *unit, const df::coord &pos)//jobslinklist, unit, pos
 {
 	// create job
-	df::job * job = new df::job();
+	df::job * job = df::allocate<df::job>();
 	job->id = *job_next_id;
 	job->pos = pos; // shallow copy?
 	//job->pos.x = pos.x; job->pos.y = pos.y; job->pos.z = pos.z;
@@ -267,7 +279,7 @@ df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *un
 	++(*job_next_id);
 	
 	// create joblink
-	df::job_list_link * joblink = new df::job_list_link();
+	df::job_list_link * joblink = df::allocate<df::job_list_link>();
 	job->list_link = joblink;
 	joblink->item = job;
 	
@@ -279,7 +291,7 @@ df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *un
 	// general refs have virtual methods, use allocate
 	auto ref = df::allocate<df::general_ref_unit_workerst>();
 	ref->unit_id = unit->id;
-	job->general_refs.push_back(  ref  );
+	job->general_refs.push_back(ref);
 	unit->job.current_job = job;
 	unit->path.dest = pos; // shallow copy?
 	
@@ -297,86 +309,95 @@ df::job_list_link * assignCleanJob(df::job_list_link *jobslinklist, df::unit *un
 
 // inlines a rewrite of Burrows::isAssignedUnit, to use burrow id instead of a burrow object
 
-bool isUnitBurrowTile(df::map_block *block, df::unit *unit, int x,int y)
+inline bool isUnitBurrowTile(df::map_block *block, df::unit *unit, int x,int y)
 {
-	for (	df::block_burrow_link *burrowlink = block->block_burrows.next; 
-			burrowlink && (binsearch_index(unit->burrows, burrowlink->item->id) >= 0) && burrowlink->item->getassignment(x,y); 
-			burrowlink = burrowlink->next	)
-		return true;
+    // might want to turn this around as a unit is likely to be a member of few burrows
+    // and a map block is more likely to contain multiple burrow designations
+    // and if the other way around, then the case of no unit burrow assignments could be
+    // done here instead of using the current bool stuff
+	for ( df::block_burrow_link *burrowlink = block->block_burrows.next  ;  burrowlink  ;  burrowlink = burrowlink->next )
+        if ( vector_contains(unit->burrows, burrowlink->item->id) && burrowlink->item->getassignment(x,y) )
+		    return true;
 	return false;
 }
 
 
 
 
-#define MAX_IDLE 15
+
+
+inline bool isActiveMilitary(const df::unit *unit)
+{
+    if (unit->military.individual_drills.size() > 0)
+        return true;
+    auto squad = df::squad::find(unit->military.squad_id);
+    return squad ? squad->activity > -1 : false;
+}
+
+inline bool isOnBreak(const df::unit *unit)
+{
+    // if unit on break or arriving migrant
+    for (int i = 0; i < unit->status.misc_traits.size(); ++i)
+        if (unit->status.misc_traits[i]->id == df::misc_trait_type::OnBreak || unit->status.misc_traits[i]->id == df::misc_trait_type::Migrant)
+            return true;
+    return false;
+
+}
+
+
+inline bool isIdle(const df::unit *unit)
+{
+    return !( unit->job.current_job || isOnBreak(unit) || isActiveMilitary(unit) );
+}
+
 //--------------------------------------------------
 //  doJanitor assign idle units to cleaning designations
 //--------------------------------------------------
 void doJanitor(color_ostream &out)
 {
 //out.print("doJanitor started\n");
-	//CHECK_NULL_POINTER(BURROW);
 	if ( !BURROW ) //= NULL
 	{
-		// shouldn't happen
-		//printerr('Janitor: burrow missing');
-		out.printerr("Janitor: burrow missing\n");
+        enabled = false;
+        active = false;
+		out.printerr("Janitor: burrow missing.  Disableing Janitor plugin\n");
 		return;
 	}
-//out.print("doJanitor has burrow\n");
-//out << BURROW->id << ":" << BURROW->name << ":" << BURROW->block_x.size() << endl;
 	if ( BURROW->block_x.size() == 0 )
 	{
 		return;
 	}
-//out.print("doJanitor has blocks\n");
 	// find end of job list
 	df::job_list_link *jobslinklist = world->job_list.next;
-	for (; jobslinklist->next; jobslinklist = jobslinklist->next)
-		;
-//out.print("doJanitor found end of jobs list\n");
+	while (jobslinklist->next)
+		jobslinklist = jobslinklist->next;
 
-
-	//local found = false
-//out.print("doJanitor initializing iterator\n");
-		/*
-			Init Iterator
--- max idle units MAX_IDLE, max units searched 30, max blocks 5
-print('init iterator', last_unit_idx)	
-	-- if at least 20 units to scan at end of df_units, then scan from where we left off
-	-- otherwise start from the beginning
-	--local last_unit_idx = (last_unit_idx and last_unit_idx < #df_units - 20) and last_unit_idx or 0
-
-	--local max_unit_idx = (last_unit_idx + 30) < #df_units and (last_unit_idx + 30) or #df_units
-		*/
+	/*
+        Init Iterator
+		search for up to MAX_IDLE idle units use up to MAX_BLOCKS map blocks of designated tiles
+        if at least 20 units left to scan in df_units, then scan from where we left off from last time
+        otherwise stat from the beginning agian.
+    */
 	auto df_units = world->units.active;
 	int last_unit_idx = (LAST_UNIT_IDX > df_units.size() - 20) ? 0 : LAST_UNIT_IDX ;
 	int max_unit_idx = df_units.size(); //(last_unit_idx + 200) < #df_units and (last_unit_idx + 200) or 
 
 	df::unit *units[MAX_IDLE];
-	int matrix[5][MAX_IDLE] = {  // [block][unit] -- distance weight matrix
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 },
-		{ 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000 }
-	};
-	//std::fill_n(matrix, 5, 10000);
+	int matrix[MAX_BLOCKS][MAX_IDLE];
 	
-//print(last_unit_idx, max_unit_idx)
 	int idle_count = 0;
 	// GET IDLE UNITS
 	{
 		int i = last_unit_idx;
 		for (; i < max_unit_idx ; ++i)
 		{
-			if	(	Units::isCitizen(df_units[i]) && !df_units[i]->job.current_job && 
+			if	(	Units::isCitizen(df_units[i]) && isIdle(df_units[i]) && 
 					df_units[i]->status.labors[df::unit_labor::CLEAN] && !df_units[i]->flags1.bits.caged )
 			{
 				units[idle_count] = df_units[i];
 				++idle_count;
-				if (idle_count >= MAX_IDLE) break ;
+				if (idle_count >= MAX_IDLE)
+                    break ;
 			}
 		}
 		if (i < df_units.size())
@@ -386,72 +407,72 @@ print('init iterator', last_unit_idx)
 		//end
 	}
 
+	std::vector<df::map_block*> blocks;
 	while ( idle_count > 0 && BURROW->block_x.size() > 0 )	// iterate next unit
 	{
-//out.print("iterate next unit\n");
-		// populate the distance matrix, this has to be
+		// populate the weighted distance matrix, this has to be
 		// done for each iteration because a block may 
 		// have been removed in the previous iteration.
 		// find the best pair while we are at it.
 		int idx_block = 0;
 		int idx_unit = 0;
 		int idx_weight = 10000;
-
-		std::vector<df::map_block*> blocks;
 		Burrows::listBlocks(&blocks, BURROW);	//	fill blocks with map blocks with burrow designations
-		df::map_block* block;
+        df::map_block* block;
 
-		int num_blocks = (blocks.size() > 5) ? 5 : blocks.size();
+		int num_blocks = (blocks.size() > MAX_BLOCKS) ? MAX_BLOCKS : blocks.size();
 		for (int b = 0; b < num_blocks; ++b)
 		{
 			for (int u=0; u < idle_count; ++u)
 			{
-				matrix[b][u] = 	std::abs(blocks[b]->map_pos.x + 8 - units[u]->pos.x) + 
-								std::abs(blocks[b]->map_pos.y + 8 - units[u]->pos.y) + 
-								std::abs(blocks[b]->map_pos.z - units[u]->pos.z);
+				matrix[b][u] = 	abs(blocks[b]->map_pos.x + 7 - units[u]->pos.x) + 
+								abs(blocks[b]->map_pos.y + 7 - units[u]->pos.y) + 
+								abs(blocks[b]->map_pos.z - units[u]->pos.z);
 				if (matrix[b][u] < idx_weight)
 				{
 					idx_weight = matrix[b][u];
-					idx_block = b; idx_unit = u;
+					idx_block = b;
+                    idx_unit = u;
 				}
 			}
 		}
 		if (num_blocks > 1)
 		{
-			int swap = matrix[0][idx_unit];
-			block = blocks[0];
+			int swap;
+            if (idx_unit > 0)
+            {
+                swap = matrix[0][idx_unit];
+			    block = blocks[0];
 
-			matrix[0][idx_unit] = matrix[idx_block][idx_unit];
-			blocks[0] = blocks[idx_block];
+			    matrix[0][idx_unit] = matrix[idx_block][idx_unit];
+			    blocks[0] = blocks[idx_block];
 
-			matrix[idx_block][idx_unit] = swap;
-			blocks[idx_block] = block;
+			    matrix[idx_block][idx_unit] = swap;
+			    blocks[idx_block] = block;
+            }
 
-			if (num_blocks > 2)
+			// (if num_blocks > 2) insertion sort, excluding index 0 which is already minimum
+			for (int i = 2; i < num_blocks; ++i) // num_blocks - 1 ?
 			{
-				// insertion sort, excluding index 0 which is already minimum
-				for (int i = 2; i < num_blocks; ++i) // numb_blocks - 1 ?
+				// value to insert
+				swap = matrix[i][idx_unit];
+				block = blocks[i];
+				int holePos = i;
+				while (holePos > 1 && swap < matrix[holePos - 1][idx_unit])
 				{
-					// value to insert
-					swap = matrix[i][idx_unit];
-					block = blocks[i];
-					int holePos = i;
-					while (holePos > 1 && swap < matrix[holePos - 1][idx_unit])
-					{
-						matrix[holePos][idx_unit] = matrix[holePos - 1][idx_unit];
-						blocks[holePos] = blocks[holePos - 1];
-						--holePos;
-					}
-					matrix[holePos][idx_unit] = swap;
-					blocks[holePos] = block;
+					matrix[holePos][idx_unit] = matrix[holePos - 1][idx_unit];
+					blocks[holePos] = blocks[holePos - 1];
+					--holePos;
 				}
+				matrix[holePos][idx_unit] = swap;
+				blocks[holePos] = block;
 			}
 		}
 
 		// extract unit
 		df::unit *unit = units[idx_unit];
-		units[idx_unit] = units[idle_count];
-		--idle_count;
+		units[idx_unit] = units[--idle_count];
+		//--idle_count;
 		bool burrowed = (unit->burrows.size() > 0);
 
 		// iteration: unit, sorted blocks, num_blocks, burrowed
@@ -461,9 +482,7 @@ print('init iterator', last_unit_idx)
 			// get the bitmasks for the designations burrow in the block
 			block = blocks[idx_block];
 			
-			//auto block_burrow = Burrows::getBlockMask(BURROW, block, false);
-			//auto *tiles = &block_burrow->tile_bitmask;
-			auto *tiles = &Burrows::getBlockMask(BURROW, block, false)->tile_bitmask;
+			df::tile_bitmask *tiles = &Burrows::getBlockMask(BURROW, block, false)->tile_bitmask;
 			for (int y = 0; y < 16; ++y)
 			{
 				// does row have tiles assigned? if not, skip 16 pointless itterations
@@ -483,7 +502,7 @@ print('init iterator', last_unit_idx)
 								{
 									// assign job, receive new job link
 									jobslinklist = assignCleanJob(jobslinklist, unit, pos);
-//out << "unit assigned" << endl;
+out << "unit assigned:  " << DFHack::Translation::TranslateName(&unit->name,false) << endl;
 									// cleanup some unneccessary assignments
 									if ( x+2 < 16 && tiles->getassignment(x+2,y) && block->walkable[x+2][y] > 0 )
 										tiles->setassignment(x+1,y,false);
@@ -498,20 +517,20 @@ print('init iterator', last_unit_idx)
 									// un-assign the tile from burrow and cleanup the
 									// burrow <-> block assignment if necessary
 									tiles->setassignment(x,y,false);
-									if (!tiles->has_assignments()) Burrows::deleteBlockMask(BURROW, block);
-									goto next_unit;
-								//else // tile outside of unit burrow, or not currently pathable, continue
-									//found = true -- note that we found a valid but inaccesible  designation
-								}
-								else // not walkable == wall/open space/blocked by building
-								{	// un-assign the tile and keep searching if not last assigned tile in block
-									tiles->setassignment(x,y,false);
 									if (!tiles->has_assignments())
-									{
-										//cleanup the burrow <-> block assignment
-										Burrows::deleteBlockMask(BURROW, block);
-										goto next_block;	// break out of for x and for y and continue with next block if present
-									}
+                                        Burrows::deleteBlockMask(BURROW, block);
+									goto next_unit;
+								}
+								//else // tile outside of unit burrow, or not currently pathable, continue
+                            }
+							else // not walkable == wall/open space/blocked by building
+							{	// un-assign the tile and keep searching if not last assigned tile in block
+                                tiles->setassignment(x,y,false);
+								if (!tiles->has_assignments())
+								{
+									//cleanup the burrow <-> block assignment
+									Burrows::deleteBlockMask(BURROW, block);
+									goto next_block;	// break out of for x and for y and continue with next block if present
 								}
 							}
 						}
@@ -519,7 +538,7 @@ print('init iterator', last_unit_idx)
 				}
 			} // for [y]
 			next_block:;
-		}	// for block
-		next_unit:;
-	}
+		} // for block
+        next_unit:;
+	} // iterate found idle units
 }
