@@ -328,10 +328,17 @@ inline bool isUnitBurrowTile(df::map_block *block, df::unit *unit, int x,int y)
 
 inline bool isActiveMilitary(const df::unit *unit)
 {
-    if (unit->military.individual_drills.size() > 0)
+    if ( unit->military.individual_drills.size() > 0 || ENUM_ATTR(profession, military, unit->profession) )
         return true;
-    auto squad = df::squad::find(unit->military.squad_id);
-    return squad ? squad->activity > -1 : false;
+    if (unit->military.squad_id > -1)
+    {
+        // when orders are completed or canceld, a unit can enter a period of civilian status before
+        // going back to military status, if the squad has an activity or order, consider unit active
+        auto squad = df::squad::find(unit->military.squad_id);
+        return squad ? squad->activity > -1 || squad->orders.size() > 0 : false;
+    }
+    else
+        return false;
 }
 
 inline bool isOnBreak(const df::unit *unit)
