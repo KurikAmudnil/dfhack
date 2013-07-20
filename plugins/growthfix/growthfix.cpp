@@ -33,7 +33,7 @@ static const int TICKS_PER_DAY = 1200;
 static const int TICKS_PER_WEEK = TICKS_PER_DAY*7;
 static const int TICKS_PER_MONTH = TICKS_PER_DAY*28;
 
-// these defines and enum are so that defaults can be set with preprocessor and allow
+// these defines are so that defaults can be set with preprocessor and allow
 // preprocessor if elif to modify the default command example in the help string
 #define _DAYS 0
 #define _WEEKS 1
@@ -41,18 +41,20 @@ static const int TICKS_PER_MONTH = TICKS_PER_DAY*28;
 #define _NOTSET 3
 // IntervalType indexes intervalAmounts and intervalTypeStrs
 static enum IntervalType { DAYS=_DAYS, WEEKS=_WEEKS, MONTHS=_MONTHS, NOTSET=_NOTSET };
-static const int IntervalAmount[] = { TICKS_PER_DAY, TICKS_PER_WEEK, TICKS_PER_MONTH, 0 };
-static const string IntervalTypeStr[] = { "day", "week", "month", "error" };
-
-// default configuration options
-#define ENABLED_DEFAULT 1
-#define SILENT_DEFAULT 0    // silent = 1  ;  verbose = 0
-#define ITYPE_DEFAULT _DAYS
-#define IAMOUNT_DEFAULT 4
+static const int IntervalAmounts[] = { TICKS_PER_DAY, TICKS_PER_WEEK, TICKS_PER_MONTH, 0 };
+static const string IntervalTypeStrs[] = { "day", "week", "month", "error" };
 
 // to stringify IAMOUNT_DEFAULT into the help string
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x) STRINGIFY2(x)
+
+//------------------------------
+// default configuration options
+//------------------------------
+#define ENABLED_DEFAULT 1
+#define SILENT_DEFAULT 0    // silent = 1  ;  verbose = 0
+#define ITYPE_DEFAULT _DAYS
+#define IAMOUNT_DEFAULT 4
 //------------------------------
 //------------------------------
 
@@ -62,15 +64,15 @@ static bool fix_active = false;
 static bool fix_enabled = ENABLED_DEFAULT;
 static bool fix_silent = SILENT_DEFAULT;
 static IntervalType fix_interval_type = (IntervalType) ITYPE_DEFAULT;
-static int fix_interval_type_amount = IAMOUNT_DEFAULT;                    // amount of iType
-static int fix_interval = IntervalAmount[fix_interval_type] * fix_interval_type_amount;  // interval in fortress ticks
+static int fix_interval_type_amount = IAMOUNT_DEFAULT;
+static int fix_interval = IntervalAmounts[fix_interval_type] * fix_interval_type_amount;  // interval in fortress ticks
 
 
 // Register plugin
 DFHACK_PLUGIN("growthfix");
 
 
-DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init(color_ostream &out, std::vector <PluginCommand> &commands)
 {
     /* default state already set
     fix_enabled = ENABLED_DEFAULT;
@@ -78,7 +80,7 @@ DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <Plug
     fix_silent = SILENT_DEFAULT;
     fix_interval_type = (IntervalType) ITYPE_DEFAULT;
     fix_interval_type_amount = IAMOUNT_DEFAULT;
-    fix_interval = IntervalAmount[fix_interval_type] * iAmount;
+    fix_interval = IntervalAmounts[fix_interval_type] * iAmount;
     */
     //out.print("GrowthFix: initialized with default settings");
 
@@ -251,7 +253,7 @@ static command_result growthfix_cmd(color_ostream &out, std::vector <std::string
         {
             fix_interval_type = cmd_type;
             fix_interval_type_amount = cmd_amount;
-            fix_interval = IntervalAmount[fix_interval_type] * fix_interval_type_amount;
+            fix_interval = IntervalAmounts[fix_interval_type] * fix_interval_type_amount;
         }
 
         if (cmd_enable != DEFAULT)
@@ -279,12 +281,12 @@ static void printStatus(color_ostream &out)
     out.print("GrowthFix:  %s with interval set to %d %s%s (%s).\n" ,
             (fix_enabled ? "enabled" : "disabled"),
             fix_interval_type_amount, 
-            IntervalTypeStr[fix_interval_type],
+            IntervalTypeStrs[fix_interval_type],
             (fix_interval_type_amount > 1 ? "s" : ""),
             (fix_silent ? "silent" : "verbose")  );
     */
     out << "GrowthFix:  " << (fix_enabled ? "enabled" : "disabled") << " with interval set to " 
-        << fix_interval_type_amount << " " << IntervalTypeStr[fix_interval_type]
+        << fix_interval_type_amount << " " << IntervalTypeStrs[fix_interval_type]
         << ((fix_interval_type_amount > 1) ? "s" : "") << (fix_silent ? " (silent)" : " (verbose)") << endl;
 }
 
