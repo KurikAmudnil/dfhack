@@ -1,12 +1,10 @@
-// This is a generic plugin that does nothing useful apart from acting as an example... of a plugin that does nothing :D
+// This plugin runs the growth / size bug fix
 
-// some headers required for a plugin. Nothing special, just the basics.
 #include "Core.h"
 #include <Console.h>
 #include <Export.h>
 #include <PluginManager.h>
 
-// DF data structure definition headers
 #include "DataDefs.h"
 #include "df/unit.h"
 #include "df/world.h"
@@ -15,21 +13,25 @@
 using namespace DFHack;
 using namespace df::enums;
 
-// our own, empty header.
-#include "growthfix.h"
+// exported plugin function prototypes
+DFhackCExport command_result plugin_init(color_ostream &out, std::vector <PluginCommand> &commands);
+DFhackCExport command_result plugin_shutdown(color_ostream &out);
+DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_change_event event);
+DFhackCExport command_result plugin_onupdate(color_ostream &out);
 
-#define TICKS_PER_DAY 1200
-#define TICKS_PER_WEEK TICKS_PER_DAY*7
-#define TICKS_PER_MONTH TICKS_PER_DAY*28
+// local (static) function prototypes
+static command_result growthfix_cmd(color_ostream &out, std::vector<std::string> &parameters);
+static void printStatus(color_ostream &out);
+static void doGrowthFix(color_ostream &out, bool now = false);
 
-// Here go all the command declarations...
-// mostly to allow having the mandatory stuff on top of the file and commands on the bottom
-command_result growthfix (color_ostream &out, std::vector <std::string> & parameters);
 
-// A plugin must be able to return its name and version.
-// The name string provided must correspond to the filename - skeleton.plug.so or skeleton.plug.dll in this case
-DFHACK_PLUGIN("growthfix");
 
+//------------------------------
+// constants
+//------------------------------
+static const int TICKS_PER_DAY = 1200;
+static const int TICKS_PER_WEEK = TICKS_PER_DAY*7;
+static const int TICKS_PER_MONTH = TICKS_PER_DAY*28;
 
 // these defines and enum are so that defaults can be set with preprocessor and allow
 // preprocessor if elif to modify the default command example in the help string
@@ -39,70 +41,51 @@ DFHACK_PLUGIN("growthfix");
 #define _NOTSET 3
 // IntervalType indexes intervalAmounts and intervalTypeStrs
 static enum IntervalType { DAYS=_DAYS, WEEKS=_WEEKS, MONTHS=_MONTHS, NOTSET=_NOTSET };
-static const int intervalAmounts[] = { TICKS_PER_DAY, TICKS_PER_WEEK, TICKS_PER_MONTH, 0 };
-static const string intervalTypeStrs[] = { " days", " weeks", " months", " " };
+static const int IntervalAmount[] = { TICKS_PER_DAY, TICKS_PER_WEEK, TICKS_PER_MONTH, 0 };
+static const string IntervalTypeStr[] = { "day", "week", "month", "error" };
 
 // default configuration options
 #define ENABLED_DEFAULT 1
-#define SILENT_DEFAULT 1
+#define SILENT_DEFAULT 0    // silent = 1  ;  verbose = 0
 #define ITYPE_DEFAULT _DAYS
 #define IAMOUNT_DEFAULT 4
 
-// to stringify IAMOUNT_DEFAULT
+// to stringify IAMOUNT_DEFAULT into the help string
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x) STRINGIFY2(x)
-
-// state
-static bool active = false;
-static bool enabled = ENABLED_DEFAULT;
-static bool silent = SILENT_DEFAULT;
-static IntervalType iType = (IntervalType) ITYPE_DEFAULT;
-static int iAmount = IAMOUNT_DEFAULT;                   // amount of iType
-static int interval = intervalAmounts[iType] * iAmount; // interval in fortress ticks
+//------------------------------
+//------------------------------
 
 
+// global plugin state
+static bool fix_active = false;
+static bool fix_enabled = ENABLED_DEFAULT;
+static bool fix_silent = SILENT_DEFAULT;
+static IntervalType fix_interval_type = (IntervalType) ITYPE_DEFAULT;
+static int fix_interval_type_amount = IAMOUNT_DEFAULT;                    // amount of iType
+static int fix_interval = IntervalAmount[fix_interval_type] * fix_interval_type_amount;  // interval in fortress ticks
 
-void doGrowthFix(color_ostream &out, bool now = false)
-{
-    int count = 0;
-    auto units = df::global::world->units.active;
-    for (int i=0, r=0; i < units.size(); ++i)
-    {
-        r = units[i]->relations.birth_time % 10;
-        if (r > 0 && units[i]->relations.birth_time > 0 )
-        {
-            units[i]->relations.birth_time -= r;
-            ++count;
-        }
-    }
-    if ( (!silent && count > 0) || now)
-        out << "GrowthFix: Fixed " << count << " units." << endl;
-}
 
-void printStatus(color_ostream &out)
-{
-    out << "GrowthFix: " << (enabled ? "enabled" : "disabled") << " with interval set to " 
-        << iAmount << intervalTypeStrs[iType] << (silent ? " (silent)" : " (verbose)") << endl;
-    //" (silent mode: " << (silent ? "on)" : "off)")
-}
+// Register plugin
+DFHACK_PLUGIN("growthfix");
 
-// Mandatory init function. If you have some global state, create it here.
+
 DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
     /* default state already set
-    enabled = ENABLED_DEFAULT;
-    active = false;
-    silent = SILENT_DEFAULT;
-    iType = (IntervalType) ITYPE_DEFAULT;
-    iAmount = IAMOUNT_DEFAULT;
-    interval = intervalAmounts[iType] * iAmount;
+    fix_enabled = ENABLED_DEFAULT;
+    fix_active = false;
+    fix_silent = SILENT_DEFAULT;
+    fix_interval_type = (IntervalType) ITYPE_DEFAULT;
+    fix_interval_type_amount = IAMOUNT_DEFAULT;
+    fix_interval = IntervalAmount[fix_interval_type] * iAmount;
     */
     //out.print("GrowthFix: initialized with default settings");
 
-    // Fill the command list with your commands.
+    // Register commands and help string
     commands.push_back(PluginCommand(
         "growthfix", "fix growth bug by rounding unit's birth time down to multiple of 10.",
-        growthfix, false, /* true means that the command can't be used from non-interactive user interface */
+        growthfix_cmd, false, /* true means that the command can't be used from non-interactive user interface */
         // Extended help string. Used by CR_WRONG_USAGE and the help command:
         "  Fix growth/size bug by rounding unit's birth time down to a multiple of 10.\n"
         "Options (case insensitive):\n"
@@ -149,27 +132,22 @@ DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <Plug
     return CR_OK;
 }
 
-// This is called right before the plugin library is removed from memory.
-DFhackCExport command_result plugin_shutdown ( color_ostream &out )
+
+DFhackCExport command_result plugin_shutdown(color_ostream &out)
 {
-    // You *MUST* kill all threads you created before this returns.
-    // If everything fails, just return CR_FAILURE. Your plugin will be
-    // in a zombie state, but things won't crash.
+    // nothing to cleanup
     return CR_OK;
 }
 
 
-// Called to notify the plugin about important state changes.
-// Invoked with DF suspended, and always before the matching plugin_onupdate.
-// More event codes may be added in the future.
 DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_change_event event)
 {
     switch (event) {
     case DFHack::state_change_event::SC_MAP_LOADED:
-        active = enabled;
+        fix_active = fix_enabled;
         break;
     case DFHack::state_change_event::SC_MAP_UNLOADED:
-        active = false;
+        fix_active = false;
         break;
     default:
         break;
@@ -177,18 +155,17 @@ DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_chan
     return CR_OK;
 }
 
-// Whatever you put here will be done in each game step. Don't abuse it.
-// It's optional, so you can just comment it out like this if you don't need it.
-DFhackCExport command_result plugin_onupdate ( color_ostream &out )
+
+DFhackCExport command_result plugin_onupdate(color_ostream &out)
 {
     static int32_t last_tick = 0;
     // active (implies enabled and world loaded)
-    if (active && last_tick != *df::global::cur_year_tick)
+    if (fix_active && last_tick != *df::global::cur_year_tick)
     {
         last_tick = *df::global::cur_year_tick;
         // offset by 1 to avoid processing at the same time
         // as other things that run at the start of the day
-        if ( (last_tick + 1) % interval == 0 )
+        if ( (last_tick + 1) % fix_interval == 0 )
         {
             doGrowthFix(out);
         }
@@ -197,21 +174,17 @@ DFhackCExport command_result plugin_onupdate ( color_ostream &out )
     return CR_OK;
 }
 
-// command proccessor
-command_result growthfix (color_ostream &out, std::vector <std::string> & parameters)
-{
-    // It's nice to print a help message you get invalid options
-    // from the user instead of just acting strange.
-    // This can be achieved by adding the extended help string to the
-    // PluginCommand registration as show above, and then returning
-    // CR_WRONG_USAGE from the function. The same string will also
-    // be used by 'help your-command'.
-    if (parameters.empty())
-        return CR_WRONG_USAGE;
 
-    enum { DISABLE=false, ENABLE=true, DEFAULT } cmdEnable = DEFAULT, cmdSilent = DEFAULT;
-    IntervalType cmdiType = NOTSET;
-    int cmdiAmount;
+// command proccessor
+static command_result growthfix_cmd(color_ostream &out, std::vector <std::string> &parameters)
+{
+    if (parameters.empty())
+        return CR_WRONG_USAGE;  // CR_WRONG_USAGE = tell dfhack to print help string
+
+    enum { DISABLE=false, ENABLE=true, DEFAULT } 
+        cmd_enable = DEFAULT, cmd_silent = DEFAULT;
+    IntervalType cmd_type = NOTSET;  // interval type
+    int cmd_amount;                  // interval amount
     
     string cmd = toLower(parameters[0]);
     if (cmd == "status")
@@ -242,24 +215,24 @@ command_result growthfix (color_ostream &out, std::vector <std::string> & parame
             cmd = toLower(parameters[i]);
 
             if (cmd == "disable")
-                cmdEnable = DISABLE;
+                cmd_enable = DISABLE;
             else if (cmd == "enable")
-                cmdEnable = ENABLE;
+                cmd_enable = ENABLE;
             else if (cmd == "silent" || cmd == "-s")
-                cmdSilent = ENABLE;
+                cmd_silent = ENABLE;
             else if (cmd == "speak"  || cmd == "+s" || cmd == "verbose" || cmd == "-v")
-                cmdSilent = DISABLE;
+                cmd_silent = DISABLE;
             else if (parameters.size() > i)
             {
                 if (cmd == "-d")
-                    cmdiType = DAYS;
+                    cmd_type = DAYS;
                 else if (cmd == "-w")
-                    cmdiType = WEEKS;
+                    cmd_type = WEEKS;
                 else if (cmd == "-m")
-                    cmdiType = MONTHS;
+                    cmd_type = MONTHS;
 
                 stringstream ss(parameters[++i]);
-                if (cmdiType == NOTSET || !(ss >> cmdiAmount) || cmdiAmount == 0)
+                if (cmd_type == NOTSET || !(ss >> cmd_amount) || cmd_amount == 0)
                     return CR_WRONG_USAGE;
             }
             else
@@ -267,25 +240,56 @@ command_result growthfix (color_ostream &out, std::vector <std::string> & parame
         }
 
         // if successfully parsed command options, set the changes
-        if (cmdiType != NOTSET)
+        if (cmd_type != NOTSET)
         {
-            iType = cmdiType;
-            iAmount = cmdiAmount;
-            interval = intervalAmounts[iType] * iAmount;
+            fix_interval_type = cmd_type;
+            fix_interval_type_amount = cmd_amount;
+            fix_interval = IntervalAmount[fix_interval_type] * fix_interval_type_amount;
         }
 
-        if (cmdEnable != DEFAULT)
+        if (cmd_enable != DEFAULT)
         {
-            enabled = cmdEnable;
-            // if enabled, activate if map already loaded
-            active = enabled ? Core::getInstance().isMapLoaded() : false;
+            fix_enabled = cmd_enable;
+            fix_active = fix_enabled ? Core::getInstance().isMapLoaded() : false;
         }
 
-        if (cmdSilent != DEFAULT)
-            silent = cmdSilent;
+        if (cmd_silent != DEFAULT)
+            fix_silent = cmd_silent;
 
-        if (cmdiType != NOTSET || cmdEnable != DEFAULT || cmdSilent != DEFAULT)
+        if (cmd_type != NOTSET || cmd_enable != DEFAULT || cmd_silent != DEFAULT)
             printStatus(out);
     }
     return CR_OK;
 }
+
+
+static void printStatus(color_ostream &out)
+{
+    out.print("GrowthFix: %s with interval set to %d %s%c (%s).\n",
+            (fix_enabled ? "enabled" : "disabled"),
+            fix_interval_type_amount, IntervalTypeStr[fix_interval_type],
+            (fix_interval_type_amount > 1 ? 's' : '\0'),
+            (fix_silent ? "silent" : "verbose"));
+    //out << "GrowthFix: " << (enabled ? "enabled" : "disabled") << " with interval set to " 
+    //    << iAmount << intervalTypeStrs[iType] << (silent ? " (silent)" : " (verbose)") << endl;
+}
+
+
+static void doGrowthFix(color_ostream &out, bool now)
+{
+    int count = 0;
+    auto units = df::global::world->units.active;
+    for (int i=0, r=0; i < units.size(); ++i)
+    {
+        r = units[i]->relations.birth_time % 10;
+        if (r > 0 && units[i]->relations.birth_time > 0 )
+        {
+            units[i]->relations.birth_time -= r;
+            ++count;
+        }
+    }
+    if ( (!fix_silent && count > 0) || now)
+        out.print("GrowthFix:  Fixed %d units.\n", count);
+        //out << "GrowthFix: Fixed " << count << " units." << endl;
+}
+

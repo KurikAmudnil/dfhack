@@ -3,14 +3,16 @@ PROJECT (growthfix)
 SET(PROJECT_SRCS
     growthfix.cpp
 )
+# (no need for an empty header)
+#  the only things exported are the required plugin functions
 # A list of headers
-SET(PROJECT_HDRS
-    growthfix.h
-)
-SET_SOURCE_FILES_PROPERTIES( ${PROJECT_HDRS} PROPERTIES HEADER_FILE_ONLY TRUE)
+#SET(PROJECT_HDRS
+#    growthfix.h
+#)
+#SET_SOURCE_FILES_PROPERTIES( ${PROJECT_HDRS} PROPERTIES HEADER_FILE_ONLY TRUE)
 
 # mash them together (headers are marked as headers and nothing will try to compile them)
-LIST(APPEND PROJECT_SRCS ${PROJECT_HDRS})
+#LIST(APPEND PROJECT_SRCS ${PROJECT_HDRS})
 
 #linux
 IF(UNIX)
