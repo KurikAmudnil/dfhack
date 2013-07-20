@@ -106,7 +106,14 @@ DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <Plug
         "  growthfix now\n"
         "  growthfix -w 2\n"
         "  growthfix disable\n"
-        "  growthfix -m 1 verbose enable\n"
+        "  growthfix -m 1 "
+// set silent/verbose example to opposite of default
+#if SILENT_DEFAULT
+        "verbose"
+#else
+        "silent"
+#endif
+        " enable\n"
         "Default configuration is equivilent to:\n"
         "  growthfix"
 #if ENABLED_DEFAULT
@@ -265,13 +272,20 @@ static command_result growthfix_cmd(color_ostream &out, std::vector <std::string
 
 static void printStatus(color_ostream &out)
 {
-    out.print("GrowthFix: %s with interval set to %d %s%c (%s).\n",
+    /*
+    // I don't understand why this prints a (null) for the %s%s
+    // and another (null) for the last %s
+    // or crashes
+    out.print("GrowthFix:  %s with interval set to %d %s%s (%s).\n" ,
             (fix_enabled ? "enabled" : "disabled"),
-            fix_interval_type_amount, IntervalTypeStr[fix_interval_type],
-            (fix_interval_type_amount > 1 ? 's' : '\0'),
-            (fix_silent ? "silent" : "verbose"));
-    //out << "GrowthFix: " << (enabled ? "enabled" : "disabled") << " with interval set to " 
-    //    << iAmount << intervalTypeStrs[iType] << (silent ? " (silent)" : " (verbose)") << endl;
+            fix_interval_type_amount, 
+            IntervalTypeStr[fix_interval_type],
+            (fix_interval_type_amount > 1 ? "s" : ""),
+            (fix_silent ? "silent" : "verbose")  );
+    */
+    out << "GrowthFix:  " << (fix_enabled ? "enabled" : "disabled") << " with interval set to " 
+        << fix_interval_type_amount << " " << IntervalTypeStr[fix_interval_type]
+        << ((fix_interval_type_amount > 1) ? "s" : "") << (fix_silent ? " (silent)" : " (verbose)") << endl;
 }
 
 
